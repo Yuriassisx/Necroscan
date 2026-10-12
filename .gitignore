@@ -1,0 +1,18 @@
+# dados de alvo / saídas de recon — NUNCA versionar
+loot/
+*.log
+hydra.restore
+owa_*.txt
+*_cracked.txt
+verbose.log
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# sistema
+.DS_Store
+Thumbs.db
