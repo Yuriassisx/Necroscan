@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/necroscan-logo.jpg" alt="Necroscan logo" width="420"></p>
+
 # 🦴 Necroscan
 
 > **Visual recon + wordlist reaper** — rastreia um site, bate screenshots de tudo,
