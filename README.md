@@ -347,17 +347,6 @@ O `--rule` gera uma **lista-base enxuta** + um **`.rule`** com leet (`sa4 se3 si
 especiais (`$!`, `$@`…) e **os anos do alvo** como regras de append — o hashcat expande
 na GPU, muito mais rápido que pré-expandir milhões de linhas em disco.
 
----
-
-## 🛡 Notas sobre lockout e password spraying
-
-- Contra portais como **OWA/AD**, cuidado com **lockout de conta**: wordlist grande +
-  muitas threads trava todas as contas.
-- Prefira **password spraying**: uma senha por vez contra todos os usuários, com espera
-  na janela de observação do AD — não um brute-force por usuário.
-- A wordlist mestre serve de **lista de senhas**; combine com sua lista de usuários.
-  Para OWA, uma lista pequena e priorizada (CeWL do site + padrões Estação+Ano) rende
-  mais que dicionário genérico.
 
 ---
 
