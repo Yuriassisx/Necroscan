@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/necroscan-logo.jpg" alt="Necroscan logo" width="420"></p>
+<p align="center"><img src="assets/necroscan-logo.png" alt="Necroscan logo" width="420"></p>
 
 # 🦴 Necroscan
 
