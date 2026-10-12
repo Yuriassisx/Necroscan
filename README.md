@@ -23,7 +23,6 @@
 - [Saída (loot)](#-saída-loot)
 - [Referência de flags](#-referência-de-flags)
 - [Integração com hashcat](#-integração-com-hashcat)
-- [Notas sobre lockout e password spraying](#-notas-sobre-lockout-e-password-spraying)
 - [Aviso legal](#-aviso-legal)
 
 ---
@@ -90,14 +89,18 @@ flowchart TD
     B -->|URLs| U[url_tokens<br/>paths + params]
     A --> D[domain_seeds<br/>nome da empresa]
 
-    subgraph OSINT [OSINT  --osint]
+    subgraph OSINT [OSINT  --osint / --social]
       E[osint_subdomains<br/>crt.sh + theHarvester]
+      S[social_osint<br/>perfis do site + enum usernames]
+      SU[enrich_from_social_urls<br/>--social-url / --social-file]
     end
 
     C --> F[WordlistBuilder<br/>CeWL + filtro técnico]
     U --> F
     D --> G
     E --> G
+    S --> G
+    SU --> G
 
     B -->|páginas| H[PeopleHarvester<br/>nomes / e-mails / cargos / usernames]
     H --> I[osint_people<br/>convenção de login + combos]
@@ -141,6 +144,8 @@ flowchart LR
 | `Fuzzer` | Fuzzing de diretórios/arquivos com o `big.txt`; usa ffuf/feroxbuster ou fuzzer interno. |
 | `ProfileBuilder` | Wordlist por perfil (cupp++): datas, combinações, ranking, política, pacotes de país, regras hashcat. |
 | `osint_subdomains` | Subdomínios via crt.sh + theHarvester. |
+| `social_osint` / `social_network_of` / `social_handle_of` | OSINT de redes sociais: perfis linkados pelo site + enumeração de usernames (LinkedIn, Instagram, Facebook, X, GitHub, TikTok, YouTube…). |
+| `enrich_from_social_urls` | Recebe URLs de perfil (flag/arquivo) e extrai handle, nome e palavras da bio pra wordlist. |
 | `domain_seeds` / `url_tokens` / `harvest_numbers` | Seeds da empresa, tokens de URL e números reais do site. |
 | `build_master` | **Consolida tudo** numa wordlist deduplicada e ordenada por relevância. |
 
@@ -273,6 +278,8 @@ Em `loot/<domínio>/`:
 | `osint_people.txt` | Relatório por pessoa (usernames prováveis + e-mail) — `--osint` |
 | `emails.txt` | E-mails descobertos / candidatos |
 | `subdomains.txt` | Subdomínios (crt.sh / theHarvester) — `--osint` |
+| `social.txt` / `social_urls.txt` | Perfis sociais achados + URLs candidatas por username |
+| `social_input.txt` | Resultado do OSINT nas URLs sociais que você passou (`--social-url`/`--social-file`) |
 | `wordlist_counts.txt` | Palavra + frequência (CeWL `-c`) — `--with-count` |
 | `screenshots/aquatone_report.html` | Relatório visual do aquatone |
 | `fuzz/` | Resultados do fuzzing |
@@ -305,8 +312,11 @@ Em `loot/<domínio>/`:
 ### OSINT
 | Flag | Descrição |
 |---|---|
-| `--osint` | Subdomínios (crt.sh) + usernames/e-mails dos nomes capturados |
+| `--osint` | Subdomínios (crt.sh) + usernames/e-mails + perfis sociais linkados pelo site |
 | `--email-domain DOM` | Gera candidatos de e-mail com esse domínio |
+| `--social` | Enumera os usernames dos funcionários nas redes sociais (best-effort) |
+| `--social-url URL` | URL(s) de perfil social p/ OSINT (repetível ou separada por vírgula) |
+| `--social-file PATH` | Arquivo com URLs de redes sociais (uma por linha) |
 | `--no-people` | Não incluir funcionários |
 
 ### JS / Screenshots / Fuzzing

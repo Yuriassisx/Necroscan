@@ -85,6 +85,34 @@ LEET_MAP = str.maketrans({"a": "4", "e": "3", "i": "1", "o": "0", "s": "5", "t":
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
+# ---- OSINT de redes sociais ----
+# redes: nome -> (template de URL com {u}, status/condicao que indica NAO-existe)
+SOCIAL_SITES = {
+    "github":    ("https://github.com/{u}", 404),
+    "gitlab":    ("https://gitlab.com/{u}", 404),
+    "instagram": ("https://www.instagram.com/{u}/", 404),
+    "facebook":  ("https://www.facebook.com/{u}", 404),
+    "twitter":   ("https://x.com/{u}", 404),
+    "linkedin":  ("https://www.linkedin.com/in/{u}", 404),
+    "tiktok":    ("https://www.tiktok.com/@{u}", 404),
+    "youtube":   ("https://www.youtube.com/@{u}", 404),
+    "reddit":    ("https://www.reddit.com/user/{u}", 404),
+    "pinterest": ("https://www.pinterest.com/{u}/", 404),
+    "telegram":  ("https://t.me/{u}", 404),
+    "medium":    ("https://medium.com/@{u}", 404),
+    "twitch":    ("https://www.twitch.tv/{u}", 404),
+    "keybase":   ("https://keybase.io/{u}", 404),
+}
+# dominios sociais p/ detectar os perfis que o PROPRIO site linka (passivo)
+SOCIAL_DOMAINS = {
+    "linkedin.com": "linkedin", "instagram.com": "instagram", "facebook.com": "facebook",
+    "fb.com": "facebook", "twitter.com": "twitter", "x.com": "twitter",
+    "youtube.com": "youtube", "youtu.be": "youtube", "tiktok.com": "tiktok",
+    "github.com": "github", "gitlab.com": "gitlab", "t.me": "telegram",
+    "telegram.me": "telegram", "pinterest.com": "pinterest", "medium.com": "medium",
+    "twitch.tv": "twitch", "reddit.com": "reddit",
+}
+
 # locais comuns do big.txt do SecLists (Windows, Kali/WSL, Linux)
 SECLISTS_BIG = [
     r"C:\SecLists\Discovery\Web-Content\big.txt",
@@ -147,6 +175,7 @@ class Crawler:
         self.pages = []               # (soup, texto) p/ coleta de pessoas
         self.script_urls = []         # .js referenciados (p/ mineracao)
         self.endpoints = set()        # endpoints/paths extraidos de JS
+        self.social_links = {}        # rede -> set de URLs sociais linkadas pelo site
 
     def _same_site(self, url):
         return urlparse(url).netloc == self.root
@@ -184,6 +213,12 @@ class Crawler:
                 js = urljoin(r.url, sc["src"].split("#")[0])
                 if js.startswith("http") and self._same_site(js):
                     self.script_urls.append(js)
+
+            # coleta perfis de redes sociais que o site linka (passivo)
+            for a in soup.find_all("a", href=True):
+                net = social_network_of(a["href"])
+                if net:
+                    self.social_links.setdefault(net, set()).add(a["href"].split("?")[0].rstrip("/"))
 
             if d < self.depth:
                 for a in soup.find_all("a", href=True):
@@ -1123,6 +1158,124 @@ def split_identifier(ident):
     return [w for w in words if len(w) >= 3]
 
 
+def social_network_of(url):
+    """Diz a qual rede social uma URL pertence (ou None)."""
+    try:
+        host = urlparse(url if "//" in url else "https://" + url).netloc.lower()
+    except Exception:
+        return None
+    host = host[4:] if host.startswith("www.") else host
+    for dom, net in SOCIAL_DOMAINS.items():
+        if host == dom or host.endswith("." + dom):
+            return net
+    return None
+
+
+def social_handle_of(url):
+    """Extrai o handle/usuario de uma URL de perfil social."""
+    path = urlparse(url if "//" in url else "https://" + url).path.strip("/")
+    if not path:
+        return None
+    seg = path.split("/")
+    # formatos tipo /in/<user>, /user/<user>, /@<user>, /<user>
+    if seg[0] in ("in", "user", "profile", "u") and len(seg) > 1:
+        h = seg[1]
+    else:
+        h = seg[-1] if seg[0] in ("@",) else seg[0]
+    h = h.lstrip("@").split("?")[0]
+    if re.fullmatch(r"[A-Za-z0-9._-]{2,40}", h) and h not in (
+            "pages", "company", "groups", "sharer", "share", "home", "watch"):
+        return h
+    return None
+
+
+def enrich_from_social_urls(urls, timeout=10):
+    """Faz OSINT em URLs de perfil social passadas pelo usuario: extrai handle, nome
+    provavel e palavras (og:title/description, title) p/ alimentar a wordlist.
+    Retorna {handles:set, names:set(tuplas), words:[], report:[]}."""
+    handles, names, words, report = set(), set(), [], []
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": DEFAULT_UA})
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
+        net = social_network_of(url) or "?"
+        h = social_handle_of(url)
+        if h:
+            handles.add(h.lower())
+            # handle "joao.silva" / "joao-silva" vira tokens tambem
+            for tok in re.split(r"[._\-]", h):
+                if len(tok) > 2 and tok.isalpha():
+                    words.append(tok.lower())
+        title = desc = ""
+        try:
+            r = sess.get(url, timeout=timeout, verify=False, allow_redirects=True)
+            soup = BeautifulSoup(r.text, "html.parser")
+            for m in soup.find_all("meta"):
+                prop = (m.get("property") or m.get("name") or "").lower()
+                if prop in ("og:title", "twitter:title") and m.get("content"):
+                    title = m["content"].strip()
+                if prop in ("og:description", "twitter:description", "description") and m.get("content"):
+                    desc = m["content"].strip()
+            if not title and soup.title:
+                title = soup.title.get_text(" ", strip=True)
+        except requests.RequestException as e:
+            report.append(f"[{net}] {url} -> erro: {e.__class__.__name__}")
+        # nome provavel: parte antes de separadores tipo "Nome (@handle) | LinkedIn"
+        if title:
+            cand = re.split(r"[\|\(\-–—•·@]", title)[0].strip()
+            parts = [p for p in cand.split() if p.isalpha() and len(p) > 1]
+            if 2 <= len(parts) <= 4:
+                names.add(tuple(p.capitalize() for p in parts))
+            for p in parts:
+                words.append(p.lower())
+        # palavras da bio/descricao
+        for w in re.findall(r"[A-Za-zÀ-ÿ]{4,20}", desc):
+            words.append(w.lower())
+        report.append(f"[{net}] {url}  handle={h or '?'}  nome={title[:60] or '?'}")
+    return {"handles": handles, "names": names, "words": words, "report": report}
+
+
+def social_osint(usernames, site_social=None, check=False, timeout=8, max_users=15):
+    """OSINT de redes sociais.
+    - Passivo: lista os perfis que o site ja linka (site_social: rede->set de URLs).
+    - Ativo (check=True): p/ cada username, gera a URL em cada rede e testa existencia
+      (best-effort; LinkedIn/IG/FB usam anti-bot, entao trate como indicio).
+    Retorna dict {report:[linhas], handles:set, urls:[...]}."""
+    report, handles, urls = [], set(), []
+
+    # 1) passivo: perfis sociais publicados no proprio site
+    if site_social:
+        for net, links in sorted(site_social.items()):
+            for link in sorted(links):
+                report.append(f"[site] {net}: {link}")
+                urls.append(link)
+                h = social_handle_of(link)
+                if h:
+                    handles.add(h.lower())
+
+    # 2) ativo: enumera usernames nas redes
+    if usernames:
+        sess = requests.Session()
+        sess.headers.update({"User-Agent": DEFAULT_UA})
+        for u in list(dict.fromkeys(usernames))[:max_users]:
+            for net, (tpl, notfound) in SOCIAL_SITES.items():
+                url = tpl.format(u=u)
+                urls.append(url)
+                if not check:
+                    continue
+                try:
+                    r = sess.get(url, timeout=timeout, verify=False, allow_redirects=True)
+                    status = "existe?" if r.status_code == 200 else (
+                        "nao" if r.status_code == notfound else f"http {r.status_code}")
+                except requests.RequestException:
+                    status = "erro/timeout"
+                if status != "nao":
+                    report.append(f"[{net}] {u} -> {url}  ({status})")
+    return {"report": report, "handles": handles, "urls": urls}
+
+
 def osint_subdomains(domain, timeout=30, run_theharvester=True):
     """OSINT externo: subdominios via crt.sh + (opcional) theHarvester p/ hosts/e-mails.
     Retorna (subdominios:set, emails:set)."""
@@ -1286,6 +1439,9 @@ def main():
     ap.add_argument("--with-count", action="store_true", help="salva wordlist_counts.txt (palavra + frequencia, estilo CeWL)")
     ap.add_argument("--osint", action="store_true", help="OSINT: subdominios (crt.sh) + usernames/e-mails a partir dos nomes capturados")
     ap.add_argument("--email-domain", default=None, help="dominio p/ gerar candidatos de e-mail (ex: empresa.com)")
+    ap.add_argument("--social", action="store_true", help="OSINT de redes sociais: enumera usernames (LinkedIn, Instagram, Facebook, GitHub, X...)")
+    ap.add_argument("--social-url", action="append", default=[], help="URL(s) de perfil social p/ OSINT (repetivel ou separada por virgula)")
+    ap.add_argument("--social-file", default=None, help="arquivo com URLs de redes sociais (uma por linha)")
 
     ap.add_argument("--no-screens", action="store_true", help="pula screenshots (so wordlist)")
     ap.add_argument("--aquatone", default=None, help="caminho explicito do binario aquatone")
@@ -1385,6 +1541,28 @@ def main():
         ph = PeopleHarvester()
         for soup, raw in c.pages:
             ph.feed(soup, raw)
+
+        # URLs de redes sociais passadas pelo usuario (--social-url / --social-file)
+        social_urls = []
+        for item in args.social_url:
+            social_urls += [u for u in item.split(",") if u.strip()]
+        if args.social_file and os.path.exists(args.social_file):
+            with open(args.social_file, encoding="utf-8", errors="ignore") as f:
+                social_urls += [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+        if social_urls:
+            print(f"[*] OSINT em {len(social_urls)} URL(s) de rede social fornecida(s)...")
+            en = enrich_from_social_urls(social_urls)
+            for nm in en["names"]:
+                ph.names.add(nm)
+            ph.usernames.update(en["handles"])
+            base[:0] = [w for w in dict.fromkeys(en["words"]) if w not in base]
+            for h in en["handles"]:
+                if h not in seeds:
+                    seeds.insert(0, h)
+            _save(os.path.join(outdir, "social_input.txt"), en["report"])
+            for line in en["report"]:
+                print("      " + line)
+
         ph.emails.update(osint_emails)          # inclui e-mails do OSINT (theHarvester)
         n_names, n_mails, n_roles = ph.summary()
         print(f"[+] {n_names} nomes, {n_mails} e-mails, {n_roles} cargos detectados.")
@@ -1417,6 +1595,24 @@ def main():
             # usernames entram na wordlist mestre (como seeds de alta relevancia)
             seeds[:0] = [u for u in info["usernames"] if u not in seeds]
             people_wl = list(dict.fromkeys(info["usernames"] + people_wl))
+
+        # OSINT de redes sociais (perfis linkados pelo site + enum de usernames)
+        if (args.osint or args.social) and (c.social_links or (args.social and ph.usernames)):
+            print("[*] OSINT de redes sociais...")
+            unames = sorted(ph.usernames) if args.social else []
+            sinfo = social_osint(unames, site_social=c.social_links,
+                                 check=args.social)
+            if sinfo["report"]:
+                _save(os.path.join(outdir, "social.txt"), sinfo["report"])
+                print(f"[+] {len(sinfo['report'])} achados -> social.txt")
+                for line in sinfo["report"][:20]:
+                    print("      " + line)
+            if sinfo["urls"]:
+                _save(os.path.join(outdir, "social_urls.txt"), sorted(set(sinfo["urls"])))
+            # handles das redes viram seeds da wordlist
+            for h in sinfo["handles"]:
+                if h not in seeds:
+                    seeds.insert(0, h)
 
     # >>> CONSOLIDACAO: uma unica wordlist com TUDO <<<
     master = build_master(base, wb, people_wl, seeds, dyn_suffixes,
